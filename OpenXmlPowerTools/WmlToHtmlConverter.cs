@@ -40,6 +40,7 @@ Version: 2.6.00
 
 ***************************************************************************/
 
+using DocumentFormat.OpenXml.Packaging;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
@@ -49,7 +50,6 @@ using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using System.Xml.Linq;
-using DocumentFormat.OpenXml.Packaging;
 
 // 200e lrm - LTR
 // 200f rlm - RTL
@@ -423,9 +423,7 @@ namespace OpenXmlPowerTools
                 return new XElement(Xhtml.html,
                     new XElement(Xhtml.head,
                         new XElement(Xhtml.meta, new XAttribute("charset", "UTF-8")),
-                        settings.PageTitle != null
-                            ? new XElement(Xhtml.title, new XText(settings.PageTitle))
-                            : new XElement(Xhtml.title, new XText(string.Empty)),
+                        new XElement(Xhtml.title, new XText(settings.PageTitle ?? string.Empty)),
                         new XElement(Xhtml.meta,
                             new XAttribute("name", "Generator"),
                             new XAttribute("content", "PowerTools for Open XML"))),
@@ -543,9 +541,16 @@ namespace OpenXmlPowerTools
             }
 
             // Transform images
-            if (element.Name == W.drawing || element.Name == W.pict || element.Name == W._object)
+            if (IsImage(element))
             {
                 return ProcessImage(wordDoc, element, settings.ImageHandler);
+            } 
+            else if (element.Name == MC.AlternateContent)
+            {
+                var allElements = GetRecursiveElements(element, new List<XName> { MC.Fallback });
+                return allElements
+                        .Where(e => IsImage(e))
+                        .Select(img => ProcessImage(wordDoc, img, settings.ImageHandler));
             }
 
             // Transform content controls.
@@ -562,6 +567,24 @@ namespace OpenXmlPowerTools
 
             // Ignore element.
             return null;
+        }
+        
+        private static IEnumerable<XElement> GetRecursiveElements(XElement parent, List<XName> except)
+        {
+            List<XElement> result = new List<XElement>();
+
+            
+            foreach(var child in parent.Elements().Where(e => !except.Contains(e.Name)))
+            {
+                result.Add(child);
+                result.AddRange(GetRecursiveElements(child, except));
+            }
+            return result;
+        }
+
+        private static bool IsImage(XElement element)
+        {
+            return element.Name == W.drawing || element.Name == W.pict || element.Name == W._object;
         }
 
         private static object ProcessHyperlinkToBookmark(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
@@ -3106,7 +3129,7 @@ namespace OpenXmlPowerTools
         public static XElement ProcessImage(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler)
         {
-            if (imageHandler == null)
+            if (element == null || imageHandler == null)
             {
                 return null;
             }
@@ -3154,9 +3177,14 @@ namespace OpenXmlPowerTools
             var altText = (string)containerElement.Elements(WP.docPr).Attributes(NoNamespace.descr).FirstOrDefault() ??
                           ((string)containerElement.Elements(WP.docPr).Attributes(NoNamespace.name).FirstOrDefault() ?? "");
 
-            var blipFill = containerElement.Elements(A.graphic)
+            var blipFill = containerElement
+                .Elements(A.graphic)
                 .Elements(A.graphicData)
-                .Elements(Pic._pic).Elements(Pic.blipFill).FirstOrDefault();
+                .Elements(Pic._pic)
+                .Elements(Pic.blipFill)
+                .FirstOrDefault();
+
+
             if (blipFill == null) return null;
 
             var imageRid = (string)blipFill.Elements(A.blip).Attributes(R.embed).FirstOrDefault();
